@@ -41,6 +41,7 @@ export function JobOutputInner(props: { job: Job; reloadJob: () => void }) {
   const [filterState, setFilterState] = useState<IFilterState>({});
   const isRunning = isJobRunning(job.status);
   const [isFollowModeEnabled, setIsFollowModeEnabled] = useState(isRunning);
+  const [isHeatmapOpen, setIsHeatmapOpen] = useState(false);
 
   const wfJobId = job?.summary_fields?.source_workflow_job?.id;
   const { results: workflowNodes, refresh } = useAwxGetAllPages<WorkflowNode>(
@@ -65,6 +66,7 @@ export function JobOutputInner(props: { job: Job; reloadJob: () => void }) {
             jobStatus={job.status}
             isFollowModeEnabled={isFollowModeEnabled}
             setIsFollowModeEnabled={setIsFollowModeEnabled}
+            onOpenHeatmap={() => setIsHeatmapOpen(true)}
           />
         </>
       )}
@@ -78,6 +80,8 @@ export function JobOutputInner(props: { job: Job; reloadJob: () => void }) {
           filterState={filterState}
           isFollowModeEnabled={isFollowModeEnabled}
           setIsFollowModeEnabled={setIsFollowModeEnabled}
+          isHeatmapOpen={isHeatmapOpen}
+          setIsHeatmapOpen={setIsHeatmapOpen}
         />
       )}
     </Section>

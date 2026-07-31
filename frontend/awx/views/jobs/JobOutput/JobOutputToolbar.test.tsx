@@ -11,6 +11,7 @@ describe('JobOutputToolbar', () => {
     setFilterState: vi.fn(),
     isFollowModeEnabled: false,
     setIsFollowModeEnabled: vi.fn(),
+    onOpenHeatmap: vi.fn(),
   };
 
   it('should render Follow button when job is running', () => {
@@ -88,6 +89,18 @@ describe('JobOutputToolbar', () => {
     await user.click(screen.getByRole('button', { name: 'Unfollow' }));
 
     expect(setIsFollowModeEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it('should call onOpenHeatmap when Task timing is clicked', async () => {
+    const user = userEvent.setup();
+    const onOpenHeatmap = vi.fn();
+    render(
+      <JobOutputToolbar {...defaultProps} jobStatus="successful" onOpenHeatmap={onOpenHeatmap} />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Task timing' }));
+
+    expect(onOpenHeatmap).toHaveBeenCalled();
   });
 
   it('should call setFilterState with empty object when clear all filters is triggered', async () => {
