@@ -4,7 +4,7 @@ import { AwxItemsResponse } from '../../../common/AwxItemsResponse';
 import { awxAPI } from '../../../common/api/awx-utils';
 import { Job } from '../../../interfaces/Job';
 import { JobEvent } from '../../../interfaces/JobEvent';
-import { ProfileTaskTiming, getTaskTimings } from './parseProfileTasks';
+import { ProfileTaskTiming, computeTaskTimings } from './computeTaskTimings';
 
 const PAGE_SIZE = 200;
 const MAX_PAGES = 100;
@@ -45,7 +45,7 @@ export function useProfileTasksData(job: Job, enabled: boolean) {
 
     void fetchAll()
       .then((events) => {
-        if (!cancelled) setTimings(getTaskTimings(events));
+        if (!cancelled) setTimings(computeTaskTimings(events));
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err : new Error('Failed to load events'));

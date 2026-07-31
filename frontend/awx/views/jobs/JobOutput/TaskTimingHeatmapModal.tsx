@@ -11,7 +11,7 @@ import {
 } from '@patternfly/react-core';
 import { useTranslation } from 'react-i18next';
 import styled from 'styled-components';
-import { ProfileTaskTiming } from './parseProfileTasks';
+import { ProfileTaskTiming } from './computeTaskTimings';
 
 const Strip = styled.div`
   display: flex;
