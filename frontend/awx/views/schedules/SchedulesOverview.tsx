@@ -1,6 +1,8 @@
+import { useGetPageUrl } from '@ansible/ansible-ui-framework';
+import { DateTimeCell } from '@ansible/ansible-ui-framework/PageCells/DateTimeCell';
+import { Scrollable } from '@ansible/ansible-ui-framework/components/Scrollable';
 import { EmptyStateNoData } from '@ansible/ansible-ui-framework/components/EmptyStateNoData';
 import { LoadingPage } from '@ansible/ansible-ui-framework/components/LoadingPage';
-import { useGetPageUrl } from '@ansible/ansible-ui-framework';
 import {
   Card,
   CardBody,
@@ -8,11 +10,20 @@ import {
   Content,
   Flex,
   FlexItem,
+  Grid,
+  GridItem,
   List,
   ListItem,
+  NumberInput,
   Popover,
+  ToggleGroup,
+  ToggleGroupItem,
+  Toolbar,
+  ToolbarContent,
+  ToolbarItem,
 } from '@patternfly/react-core';
-import { ReactNode, useCallback, useMemo } from 'react';
+import { ExclamationTriangleIcon } from '@patternfly/react-icons';
+import { ReactNode, useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { RRuleSet, rrulestr } from 'rrule';
@@ -26,11 +37,17 @@ import { useGetScheduleUrl } from './hooks/useGetScheduleUrl';
 // JS Date.getDay() returns 0=Sunday..6=Saturday. Display Monday first.
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
-const WINDOW_DAYS = 7;
 // Cap occurrences per schedule to avoid freezing on very frequent (e.g. minutely) rules.
 const MAX_OCCURRENCES_PER_SCHEDULE = 2000;
 // Number of shading steps, mapped to the PatternFly blue chart color scale.
 const INTENSITY_LEVELS = 5;
+// Selectable look-ahead windows in days.
+const WINDOW_OPTIONS = [7, 14, 30];
+const DEFAULT_WINDOW_DAYS = 7;
+const DEFAULT_OVERLOAD_THRESHOLD = 3;
+const MAX_UPCOMING = 25;
+// Fixed display order for the job-type filter.
+const TYPE_ORDER = ['job', 'workflow_job', 'project_update', 'inventory_update', 'system_job'];
 
 // Level 0 = no runs; levels 1..5 map to the PatternFly blue chart tokens.
 const LEVEL_BACKGROUNDS = [
@@ -45,6 +62,18 @@ const LEVEL_BACKGROUNDS = [
 interface HeatmapCell {
   runs: number;
   schedules: Schedule[];
+}
+
+interface Occurrence {
+  date: Date;
+  schedule: Schedule;
+}
+
+interface HeatmapData {
+  cells: HeatmapCell[][];
+  max: number;
+  total: number;
+  upcoming: Occurrence[];
 }
 
 const ScrollContainer = styled.div`
@@ -78,7 +107,7 @@ const CellTd = styled.td`
   line-height: 0;
 `;
 
-const CellButton = styled.button<{ $level: number }>`
+const CellButton = styled.button<{ $level: number; $overload: boolean }>`
   display: block;
   width: 1.75rem;
   height: 1.75rem;
@@ -87,6 +116,11 @@ const CellButton = styled.button<{ $level: number }>`
   border: 1px solid var(--pf-t--global--border--color--default);
   background-color: ${({ $level }) => LEVEL_BACKGROUNDS[$level]};
   cursor: ${({ $level }) => ($level > 0 ? 'pointer' : 'default')};
+  outline-offset: -2px;
+  outline: ${({ $overload }) =>
+    $overload
+      ? '2px solid var(--pf-t--global--border--color--status--danger--default)'
+      : '2px solid transparent'};
   &:not(:disabled):hover {
     outline: 2px solid var(--pf-t--global--border--color--brand--default);
   }
@@ -106,21 +140,27 @@ const PopoverList = styled.div`
   overflow-y: auto;
 `;
 
+const TimelineList = styled.div`
+  max-height: 28rem;
+  overflow-y: auto;
+`;
+
 function intensityLevel(runs: number, max: number): number {
   if (runs <= 0 || max <= 0) return 0;
   return Math.min(INTENSITY_LEVELS, Math.ceil((runs / max) * INTENSITY_LEVELS));
 }
 
-function buildHeatmap(schedules: Schedule[]): {
-  cells: HeatmapCell[][];
-  max: number;
-  total: number;
-} {
+function scheduleType(schedule: Schedule): string {
+  return schedule.summary_fields.unified_job_template.unified_job_type;
+}
+
+function buildHeatmap(schedules: Schedule[], windowDays: number): HeatmapData {
   // Per slot keep the run count (for colour) and the distinct schedules (for the popover).
   const runs: number[][] = DAY_ORDER.map(() => HOURS.map(() => 0));
   const scheduleMaps = DAY_ORDER.map(() => HOURS.map(() => new Map<number, Schedule>()));
+  const upcoming: Occurrence[] = [];
   const start = new Date();
-  const end = new Date(start.getTime() + WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const end = new Date(start.getTime() + windowDays * 24 * 60 * 60 * 1000);
   let max = 0;
   let total = 0;
 
@@ -144,6 +184,7 @@ function buildHeatmap(schedules: Schedule[]): {
       const hour = occurrence.getHours();
       runs[dayIndex][hour] += 1;
       scheduleMaps[dayIndex][hour].set(schedule.id, schedule);
+      upcoming.push({ date: occurrence, schedule });
       total += 1;
       if (runs[dayIndex][hour] > max) max = runs[dayIndex][hour];
     }
@@ -155,8 +196,9 @@ function buildHeatmap(schedules: Schedule[]): {
       schedules: Array.from(scheduleMaps[dayIndex][hour].values()),
     }))
   );
+  upcoming.sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  return { cells, max, total };
+  return { cells, max, total, upcoming };
 }
 
 export function SchedulesOverview() {
@@ -164,6 +206,28 @@ export function SchedulesOverview() {
   const getPageUrl = useGetPageUrl();
   const getScheduleUrl = useGetScheduleUrl();
   const { results, error, isLoading, refresh } = useAwxGetAllPages<Schedule>(awxAPI`/schedules/`);
+
+  const [windowDays, setWindowDays] = useState(DEFAULT_WINDOW_DAYS);
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  const [threshold, setThreshold] = useState(DEFAULT_OVERLOAD_THRESHOLD);
+  // A single popover is shared by all cells and anchored to the clicked one via triggerRef.
+  const [popover, setPopover] = useState<{
+    cell: HeatmapCell;
+    label: string;
+    overloaded: boolean;
+  } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const typeLabels = useMemo<Record<string, string>>(
+    () => ({
+      job: t('Playbook run'),
+      workflow_job: t('Workflow job'),
+      project_update: t('Project update'),
+      inventory_update: t('Inventory sync'),
+      system_job: t('Management job'),
+    }),
+    [t]
+  );
 
   const dayLabels = useMemo(
     () => [
@@ -178,7 +242,21 @@ export function SchedulesOverview() {
     [t]
   );
 
-  const { cells, max, total } = useMemo(() => buildHeatmap(results ?? []), [results]);
+  const presentTypes = useMemo(() => {
+    const types = new Set((results ?? []).map(scheduleType));
+    return TYPE_ORDER.filter((type) => types.has(type));
+  }, [results]);
+
+  const filteredSchedules = useMemo(() => {
+    const all = results ?? [];
+    if (selectedTypes.length === 0) return all;
+    return all.filter((schedule) => selectedTypes.includes(scheduleType(schedule)));
+  }, [results, selectedTypes]);
+
+  const { cells, max, total, upcoming } = useMemo(
+    () => buildHeatmap(filteredSchedules, windowDays),
+    [filteredSchedules, windowDays]
+  );
 
   const getScheduleHref = useCallback(
     (schedule: Schedule): string | undefined => {
@@ -189,9 +267,21 @@ export function SchedulesOverview() {
     [getScheduleUrl, getPageUrl]
   );
 
+  const toggleType = useCallback((type: string) => {
+    setSelectedTypes((prev) =>
+      prev.includes(type) ? prev.filter((value) => value !== type) : [...prev, type]
+    );
+  }, []);
+
   const renderPopoverBody = useCallback(
-    (cell: HeatmapCell): ReactNode => (
+    (cell: HeatmapCell, overloaded: boolean): ReactNode => (
       <PopoverList>
+        {overloaded && (
+          <Content component="small">
+            <ExclamationTriangleIcon color="var(--pf-t--global--icon--color--status--warning--default)" />{' '}
+            {t('Busy time slot')}
+          </Content>
+        )}
         <Content component="small">
           {t('{{runs}} runs from {{schedules}} schedule(s)', {
             runs: cell.runs,
@@ -215,13 +305,11 @@ export function SchedulesOverview() {
 
   if (isLoading && !results) return <LoadingPage />;
   if (error) return <AwxError error={error} handleRefresh={refresh} />;
-  if (total === 0) {
+  if (!results || results.length === 0) {
     return (
       <EmptyStateNoData
         title={t('No scheduled job runs')}
-        description={t(
-          'There are no enabled schedules with job runs in the next 7 days that you have access to.'
-        )}
+        description={t('There are no schedules you have access to.')}
       />
     );
   }
@@ -234,79 +322,189 @@ export function SchedulesOverview() {
     });
 
   return (
-    <Card>
-      <CardTitle>{t('Scheduled job runs over the next 7 days')}</CardTitle>
-      <CardBody>
-        <Content component="p">
-          {t(
-            'Only enabled schedules you have access to are shown, bucketed by weekday and hour in your local time zone. Click a cell to see and open its schedules. Total runs: {{total}}.',
-            { total }
-          )}
-        </Content>
-        <ScrollContainer>
-          <HeatmapTable>
-            <thead>
-              <tr>
-                <th />
-                {HOURS.map((hour) => (
-                  <HourHeader key={hour} scope="col">
-                    {hour.toString().padStart(2, '0')}
-                  </HourHeader>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {dayLabels.map((dayLabel, dayIndex) => (
-                <tr key={dayLabel}>
-                  <DayHeader scope="row">{dayLabel}</DayHeader>
-                  {HOURS.map((hour) => {
-                    const cell = cells[dayIndex][hour];
-                    const level = intensityLevel(cell.runs, max);
-                    const label = slotLabel(dayLabel, hour);
-                    const button = (
-                      <CellButton
-                        $level={level}
-                        type="button"
-                        disabled={cell.runs === 0}
-                        aria-label={label}
-                        title={cell.runs > 0 ? label : undefined}
-                      />
-                    );
-                    return (
-                      <CellTd key={hour}>
-                        {cell.runs > 0 ? (
-                          <Popover headerContent={label} bodyContent={renderPopoverBody(cell)}>
-                            {button}
-                          </Popover>
-                        ) : (
-                          button
-                        )}
-                      </CellTd>
-                    );
-                  })}
-                </tr>
+    <>
+      <Toolbar>
+        <ToolbarContent>
+          <ToolbarItem variant="label">{t('Time window')}</ToolbarItem>
+          <ToolbarItem>
+            <ToggleGroup aria-label={t('Time window')}>
+              {WINDOW_OPTIONS.map((days) => (
+                <ToggleGroupItem
+                  key={days}
+                  text={t('{{days}} days', { days })}
+                  isSelected={windowDays === days}
+                  onChange={() => setWindowDays(days)}
+                />
               ))}
-            </tbody>
-          </HeatmapTable>
-        </ScrollContainer>
-        <Flex
-          alignItems={{ default: 'alignItemsCenter' }}
-          spaceItems={{ default: 'spaceItemsXs' }}
-          style={{ marginTop: 'var(--pf-t--global--spacer--md)' }}
-        >
-          <FlexItem>
-            <Content component="small">{t('Fewer')}</Content>
-          </FlexItem>
-          {[0, 1, 2, 3, 4, 5].map((level) => (
-            <FlexItem key={level}>
-              <LegendSwatch $level={level} />
-            </FlexItem>
-          ))}
-          <FlexItem>
-            <Content component="small">{t('More')}</Content>
-          </FlexItem>
-        </Flex>
-      </CardBody>
-    </Card>
+            </ToggleGroup>
+          </ToolbarItem>
+          {presentTypes.length > 1 && (
+            <>
+              <ToolbarItem variant="separator" />
+              <ToolbarItem variant="label">{t('Job type')}</ToolbarItem>
+              <ToolbarItem>
+                <ToggleGroup aria-label={t('Job type')}>
+                  {presentTypes.map((type) => (
+                    <ToggleGroupItem
+                      key={type}
+                      text={typeLabels[type] ?? type}
+                      isSelected={selectedTypes.includes(type)}
+                      onChange={(event) => {
+                        toggleType(type);
+                        // Drop the lingering focus ring after a mouse click, but keep
+                        // keyboard focus (event.detail is 0 for keyboard activation).
+                        if (event.detail > 0 && document.activeElement instanceof HTMLElement) {
+                          document.activeElement.blur();
+                        }
+                      }}
+                    />
+                  ))}
+                </ToggleGroup>
+              </ToolbarItem>
+            </>
+          )}
+          <ToolbarItem variant="separator" />
+          <ToolbarItem variant="label">{t('Overload ≥')}</ToolbarItem>
+          <ToolbarItem>
+            <NumberInput
+              value={threshold}
+              min={1}
+              onMinus={() => setThreshold((value) => Math.max(1, value - 1))}
+              onPlus={() => setThreshold((value) => value + 1)}
+              onChange={(event) => {
+                const value = Number((event.target as HTMLInputElement).value);
+                if (!Number.isNaN(value)) setThreshold(Math.max(1, value));
+              }}
+              inputAriaLabel={t('Overload threshold')}
+            />
+          </ToolbarItem>
+        </ToolbarContent>
+      </Toolbar>
+      <Scrollable marginTop={16} marginBottom={16}>
+        <Grid hasGutter>
+          <GridItem lg={8}>
+            <Card>
+              <CardTitle>{t('Scheduled job runs')}</CardTitle>
+              <CardBody>
+                <Content component="p">
+                  {t(
+                    'Enabled schedules bucketed by weekday and hour in your local time zone. Click a cell to open its schedules. Total runs: {{total}}.',
+                    { total }
+                  )}
+                </Content>
+                {total === 0 ? (
+                  <EmptyStateNoData
+                    title={t('No scheduled job runs')}
+                    description={t('No runs match the current filters and time window.')}
+                  />
+                ) : (
+                  <>
+                    <ScrollContainer>
+                      <HeatmapTable>
+                        <thead>
+                          <tr>
+                            <th />
+                            {HOURS.map((hour) => (
+                              <HourHeader key={hour} scope="col">
+                                {hour.toString().padStart(2, '0')}
+                              </HourHeader>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dayLabels.map((dayLabel, dayIndex) => (
+                            <tr key={dayLabel}>
+                              <DayHeader scope="row">{dayLabel}</DayHeader>
+                              {HOURS.map((hour) => {
+                                const cell = cells[dayIndex][hour];
+                                const level = intensityLevel(cell.runs, max);
+                                const overloaded = cell.runs > 0 && cell.runs >= threshold;
+                                const label = slotLabel(dayLabel, hour);
+                                return (
+                                  <CellTd key={hour}>
+                                    <CellButton
+                                      $level={level}
+                                      $overload={overloaded}
+                                      type="button"
+                                      disabled={cell.runs === 0}
+                                      aria-label={label}
+                                      title={cell.runs > 0 ? label : undefined}
+                                      onClick={(event) => {
+                                        triggerRef.current = event.currentTarget;
+                                        setPopover({ cell, label, overloaded });
+                                      }}
+                                    />
+                                  </CellTd>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </HeatmapTable>
+                    </ScrollContainer>
+                    {popover && (
+                      <Popover
+                        isVisible
+                        shouldClose={() => setPopover(null)}
+                        triggerRef={triggerRef}
+                        headerContent={popover.label}
+                        bodyContent={renderPopoverBody(popover.cell, popover.overloaded)}
+                      />
+                    )}
+                    <Flex
+                      alignItems={{ default: 'alignItemsCenter' }}
+                      spaceItems={{ default: 'spaceItemsXs' }}
+                      style={{ marginTop: 'var(--pf-t--global--spacer--md)' }}
+                    >
+                      <FlexItem>
+                        <Content component="small">{t('Fewer')}</Content>
+                      </FlexItem>
+                      {[0, 1, 2, 3, 4, 5].map((level) => (
+                        <FlexItem key={level}>
+                          <LegendSwatch $level={level} />
+                        </FlexItem>
+                      ))}
+                      <FlexItem>
+                        <Content component="small">{t('More')}</Content>
+                      </FlexItem>
+                    </Flex>
+                  </>
+                )}
+              </CardBody>
+            </Card>
+          </GridItem>
+          <GridItem lg={4}>
+            <Card>
+              <CardTitle>{t('Upcoming runs')}</CardTitle>
+              <CardBody>
+                {upcoming.length === 0 ? (
+                  <Content component="small">{t('No upcoming runs in this time window.')}</Content>
+                ) : (
+                  <TimelineList>
+                    <List isPlain>
+                      {upcoming.slice(0, MAX_UPCOMING).map((occurrence) => {
+                        const href = getScheduleHref(occurrence.schedule);
+                        return (
+                          <ListItem key={`${occurrence.schedule.id}-${occurrence.date.getTime()}`}>
+                            <Content component="small">
+                              <DateTimeCell value={occurrence.date.getTime()} />
+                            </Content>
+                            {href ? (
+                              <Link to={href}>{occurrence.schedule.name}</Link>
+                            ) : (
+                              <span>{occurrence.schedule.name}</span>
+                            )}
+                          </ListItem>
+                        );
+                      })}
+                    </List>
+                  </TimelineList>
+                )}
+              </CardBody>
+            </Card>
+          </GridItem>
+        </Grid>
+      </Scrollable>
+    </>
   );
 }
