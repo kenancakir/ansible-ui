@@ -50,6 +50,8 @@ function renderJobOutput(job: typeof jobFixture) {
         filterState={{}}
         isFollowModeEnabled={false}
         setIsFollowModeEnabled={vi.fn()}
+        isHeatmapOpen={false}
+        setIsHeatmapOpen={vi.fn()}
       />
     </SWRConfig>
   );
@@ -90,6 +92,8 @@ describe('JobOutputEvents', () => {
           filterState={{}}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={vi.fn()}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );
@@ -145,6 +149,8 @@ describe('JobOutputEvents', () => {
           filterState={stableFilterState}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={stableSetFollow}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );
@@ -168,6 +174,8 @@ describe('JobOutputEvents', () => {
           filterState={stableFilterState}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={stableSetFollow}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );
@@ -222,6 +230,8 @@ describe('JobOutputEvents', () => {
           filterState={stableFilterState}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={stableSetFollow}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );
@@ -246,6 +256,8 @@ describe('JobOutputEvents', () => {
           filterState={stableFilterState}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={stableSetFollow}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );
@@ -295,6 +307,8 @@ describe('JobOutputEvents', () => {
           filterState={{}}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={stableSetFollow}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );
@@ -320,6 +334,8 @@ describe('JobOutputEvents', () => {
           filterState={newFilterState}
           isFollowModeEnabled={false}
           setIsFollowModeEnabled={stableSetFollow}
+          isHeatmapOpen={false}
+          setIsHeatmapOpen={vi.fn()}
         />
       </SWRConfig>
     );

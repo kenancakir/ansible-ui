@@ -56,6 +56,7 @@ export function JobOutputRow(props: {
       style={{ cursor: isClickableRow ? 'pointer' : 'auto' }}
       ref={ref}
       className="output-grid-row"
+      data-output-line={row.line}
       role="button"
       tabIndex={0}
       onClick={() => {

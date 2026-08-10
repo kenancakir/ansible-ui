@@ -15,9 +15,10 @@ interface IJobOutputToolbarProps {
   jobStatus?: JobStatus;
   isFollowModeEnabled: boolean;
   setIsFollowModeEnabled: (value: boolean) => void;
+  onOpenHeatmap: () => void;
 }
 
-export function JobOutputToolbar(props: IJobOutputToolbarProps) {
+export function JobOutputToolbar(props: Readonly<IJobOutputToolbarProps>) {
   const {
     toolbarFilters,
     filterState,
@@ -25,6 +26,7 @@ export function JobOutputToolbar(props: IJobOutputToolbarProps) {
     jobStatus,
     isFollowModeEnabled,
     setIsFollowModeEnabled,
+    onOpenHeatmap,
   } = props;
   const { t } = useTranslation();
 
@@ -52,6 +54,9 @@ export function JobOutputToolbar(props: IJobOutputToolbarProps) {
             {isFollowModeEnabled ? t('Unfollow') : t('Follow')}
           </Button>
         ) : null}
+        <Button variant="secondary" onClick={onOpenHeatmap} ouiaId="task-timing-heatmap-button">
+          {t('Task timing')}
+        </Button>
       </ToolbarContent>
     </Toolbar>
   );

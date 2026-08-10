@@ -9,7 +9,9 @@ import { HostEventModal } from './HostEventModal';
 import './JobOutput.css';
 import { JobOutputLoadingRow } from './JobOutputLoadingRow';
 import { IJobOutputRow, JobOutputRow, jobEventToRows, tracebackToRows } from './JobOutputRow';
+import { TaskTimingHeatmapModal } from './TaskTimingHeatmapModal';
 import { useJobOutput } from './useJobOutput';
+import { useProfileTasksData } from './useProfileTasksData';
 import {
   IJobOutputChildrenSummary,
   useJobOutputChildrenSummary,
@@ -35,9 +37,11 @@ interface IJobOutputEventsProps {
   filterState: IFilterState;
   isFollowModeEnabled: boolean;
   setIsFollowModeEnabled: (isFollowModeEnabled: boolean) => void;
+  isHeatmapOpen: boolean;
+  setIsHeatmapOpen: (isHeatmapOpen: boolean) => void;
 }
 
-export function JobOutputEvents(props: IJobOutputEventsProps) {
+export function JobOutputEvents(props: Readonly<IJobOutputEventsProps>) {
   const {
     job,
     reloadJob,
@@ -45,6 +49,8 @@ export function JobOutputEvents(props: IJobOutputEventsProps) {
     filterState,
     isFollowModeEnabled,
     setIsFollowModeEnabled,
+    isHeatmapOpen,
+    setIsHeatmapOpen,
   } = props;
 
   const [hostModalData, setHostModalData] = useState<IJobOutputRow | null>(null);
@@ -104,6 +110,22 @@ export function JobOutputEvents(props: IJobOutputEventsProps) {
     return jobOutputRows;
   }, [jobEventCount, job.result_traceback, jobEvents, getCachedEventRows]);
 
+  const {
+    timings,
+    isLoading: isTimingsLoading,
+    error: timingsError,
+  } = useProfileTasksData(job, isHeatmapOpen);
+
+  const maxOutputLine = useMemo(() => {
+    for (let i = jobOutputRows.length - 1; i >= 0; i--) {
+      const row = jobOutputRows[i];
+      if (typeof row !== 'number' && row.line !== undefined) return row.line;
+    }
+    return 0;
+  }, [jobOutputRows]);
+
+  const [pendingScrollLine, setPendingScrollLine] = useState<number | null>(null);
+
   const [collapsed, setCollapsedState] = useState<ICollapsed>({});
   const setCollapsed = (uuid: string, counter: number, collapsed: boolean) => {
     setCollapsedState((collapsedState) => ({
@@ -144,6 +166,36 @@ export function JobOutputEvents(props: IJobOutputEventsProps) {
   );
 
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const jumpToLine = useCallback(
+    (line: number) => {
+      setIsHeatmapOpen(false);
+      const container = containerRef.current;
+      if (!container) return;
+      setIsFollowModeEnabled(false);
+      // Bring the target line into the virtualized window first (proportional scroll),
+      // then refine once the row has rendered.
+      const fraction = maxOutputLine > 0 ? Math.min(line / maxOutputLine, 1) : 0;
+      container.scrollTop = fraction * Math.max(container.scrollHeight - container.clientHeight, 0);
+      setPendingScrollLine(line);
+    },
+    [maxOutputLine, setIsFollowModeEnabled, setIsHeatmapOpen]
+  );
+
+  useEffect(() => {
+    if (pendingScrollLine === null) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      const el = containerRef.current?.querySelector(`[data-output-line="${pendingScrollLine}"]`);
+      if (el) {
+        el.scrollIntoView({ block: 'center' });
+        setPendingScrollLine(null);
+      } else if (++tries >= 40) {
+        setPendingScrollLine(null);
+      }
+    }, 50);
+    return () => clearInterval(timer);
+  }, [pendingScrollLine]);
 
   const canCollapseEvents = childrenSummary?.event_processing_finished && childrenSummary.is_tree;
   const estimatedMaxLines = jobOutputRows.length * 5;
@@ -271,6 +323,14 @@ export function JobOutputEvents(props: IJobOutputEventsProps) {
           hostEvent={selectedRowHostData}
         />
       )}
+      <TaskTimingHeatmapModal
+        isOpen={isHeatmapOpen}
+        onClose={() => setIsHeatmapOpen(false)}
+        timings={timings}
+        isLoading={isTimingsLoading}
+        error={timingsError}
+        onSelectTask={jumpToLine}
+      />
     </>
   );
 }

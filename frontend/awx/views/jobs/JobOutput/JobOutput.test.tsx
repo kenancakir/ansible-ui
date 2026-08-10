@@ -127,6 +127,7 @@ describe('JobOutput', () => {
         jobStatus="successful"
         isFollowModeEnabled={false}
         setIsFollowModeEnabled={() => {}}
+        onOpenHeatmap={() => {}}
       />
     );
 
