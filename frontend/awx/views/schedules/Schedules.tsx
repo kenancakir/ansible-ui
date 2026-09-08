@@ -1,4 +1,4 @@
-import { PageHeader, PageLayout } from '@ansible/ansible-ui-framework';
+import { PageHeader, PageLayout, PageTab, PageTabs } from '@ansible/ansible-ui-framework';
 import { useTranslation } from 'react-i18next';
 import { ActivityStreamIcon } from '../../common/ActivityStreamIcon';
 import { awxAPI } from '../../common/api/awx-utils';
@@ -6,6 +6,7 @@ import { useAwxConfig } from '../../common/useAwxConfig';
 import { useGetDocsUrl } from '@ansible/common-ui/utils/useGetDocsUrl';
 import { AwxRoute } from '../../main/AwxRoutes';
 import { SchedulesList } from './SchedulesList';
+import { SchedulesOverview } from './SchedulesOverview';
 
 export function Schedules(props: { sublistEndpoint?: string }) {
   const { t } = useTranslation();
@@ -24,11 +25,18 @@ export function Schedules(props: { sublistEndpoint?: string }) {
         )}
         headerActions={<ActivityStreamIcon type={'schedule'} />}
       />
-      <SchedulesList
-        createSchedulePageId={AwxRoute.CreateSchedule}
-        sublistEndpoint={props.sublistEndpoint}
-        url={awxAPI`/schedules/`}
-      />
+      <PageTabs>
+        <PageTab label={t('List')}>
+          <SchedulesList
+            createSchedulePageId={AwxRoute.CreateSchedule}
+            sublistEndpoint={props.sublistEndpoint}
+            url={awxAPI`/schedules/`}
+          />
+        </PageTab>
+        <PageTab label={t('Overview')}>
+          <SchedulesOverview />
+        </PageTab>
+      </PageTabs>
     </PageLayout>
   );
 }
