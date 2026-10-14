@@ -14,7 +14,7 @@ import {
 import { PageFormTextInput } from '@ansible/ansible-ui-framework/PageForm/Inputs/PageFormTextInput';
 import { PageFormSection } from '@ansible/ansible-ui-framework/PageForm/Utils/PageFormSection';
 import { validateUrl } from '@ansible/awx-ui/administration/notifiers/NotifierFormInner';
-import { AwxPageForm } from '@ansible/awx-ui/common/AwxPageForm';
+import { PlatformPageForm } from '../../common/PlatformPageForm';
 import { Application } from '@ansible/awx-ui/interfaces/Application';
 import { requestGet, requestPatch } from '@ansible/common-ui/crud/Data';
 import { useOptions } from '@ansible/common-ui/crud/useOptions';
@@ -29,26 +29,7 @@ import { PlatformRoute } from '../../main/PlatformRoutes';
 import { gatewayAPI } from '../../utils/gateway-api-utils';
 import { PageFormPlatformOrganizationSelect } from '../organizations/components/PageFormPlatformOrganizationSelect';
 import { OAuthApplicationSecretModal } from './OAuthApplicationSecretModal';
-
-interface FieldChoice {
-  value: string;
-  display_name: string;
-}
-
-interface ApplicationFieldMeta {
-  type: string;
-  required: boolean;
-  read_only: boolean;
-  label: string;
-  help_text?: string;
-  choices?: FieldChoice[];
-}
-
-interface ApplicationOptionsResponse {
-  actions?: {
-    POST?: Record<string, ApplicationFieldMeta>;
-  };
-}
+import { ActionsResponse, OptionsResponse } from '@ansible/common-ui/interfaces/OptionsResponse';
 
 export function CreateOAuthApplication() {
   const { t } = useTranslation();
@@ -57,6 +38,9 @@ export function CreateOAuthApplication() {
   const postRequest = usePostRequest<Application>();
   const { clearCacheByKey } = useClearCache();
   const { pushDialog, popDialog } = usePageDialogs();
+  const { data: optionsData } = useOptions<OptionsResponse<ActionsResponse>>(
+    gatewayAPI`/applications/`
+  );
 
   const onSubmit: PageFormSubmitHandler<Application> = async (application: Application) => {
     const newApplication = await postRequest(gatewayAPI`/applications/`, application);
@@ -86,7 +70,7 @@ export function CreateOAuthApplication() {
           { label: t('Create OAuth application') },
         ]}
       />
-      <AwxPageForm<Application>
+      <PlatformPageForm<Application>
         submitText={t('Create OAuth application')}
         onSubmit={onSubmit}
         cancelText={t('Cancel')}
@@ -98,9 +82,10 @@ export function CreateOAuthApplication() {
           skip_authorization: false,
           pkce_required: true,
         }}
+        optionsData={optionsData}
       >
         <OAuthApplicationInputs mode="create" />
-      </AwxPageForm>
+      </PlatformPageForm>
     </PageLayout>
   );
 }
@@ -115,6 +100,9 @@ export function EditOAuthApplication() {
   const { data: application } = useSWR<Application>(
     gatewayAPI`/applications/${id.toString()}/`,
     requestGet
+  );
+  const { data: optionsData } = useOptions<OptionsResponse<ActionsResponse>>(
+    gatewayAPI`/applications/`
   );
 
   const onSubmit: PageFormSubmitHandler<Application> = async (
@@ -175,24 +163,39 @@ export function EditOAuthApplication() {
           },
         ]}
       />
-      <AwxPageForm<Application>
+      <PlatformPageForm<Application>
         submitText={t('Save OAuth application')}
         onSubmit={onSubmit}
         cancelText={t('Cancel')}
         onCancel={onCancel}
         defaultValue={application}
+        optionsData={optionsData}
       >
         <OAuthApplicationInputs mode="edit" />
-      </AwxPageForm>
+      </PlatformPageForm>
     </PageLayout>
   );
 }
 
-function choicesToOptions(choices?: FieldChoice[]) {
-  return (choices ?? []).map((choice) => ({
-    label: choice.display_name,
-    value: choice.value,
-  }));
+export function choicesToOptions(
+  choices?: [string, string][] | { value: string; display_name: string }[]
+) {
+  if (!choices) return [];
+  if (Array.isArray(choices) && choices.length > 0) {
+    const first = choices[0];
+    if (Array.isArray(first)) {
+      return (choices as [string, string][]).map(([value, label]) => ({
+        label,
+        value,
+      }));
+    } else if (typeof first === 'object' && 'display_name' in first) {
+      return (choices as { value: string; display_name: string }[]).map((choice) => ({
+        label: choice.display_name,
+        value: choice.value,
+      }));
+    }
+  }
+  return [];
 }
 
 function OAuthApplicationInputs(props: Readonly<{ mode: 'create' | 'edit' }>) {
@@ -205,7 +208,9 @@ function OAuthApplicationInputs(props: Readonly<{ mode: 'create' | 'edit' }>) {
     gatewayAPI`/settings/all/`,
     requestGet
   );
-  const { data: options } = useOptions<ApplicationOptionsResponse>(gatewayAPI`/applications/`);
+  const { data: options } = useOptions<OptionsResponse<ActionsResponse>>(
+    gatewayAPI`/applications/`
+  );
   const fields = options?.actions?.POST;
 
   return (

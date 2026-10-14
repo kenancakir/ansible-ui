@@ -5,22 +5,30 @@ import { AutomationDashboardDateRangeFilterPresets } from '../constants';
 import { QUERY_PARAMS, useAutomationDashboardView } from './useAutomationDashboardView';
 import { useAutomationDashboardBaseView } from '../common/useAutomationDashboardBaseView';
 import type { IAutomationDashboardBaseView } from '../common/useAutomationDashboardBaseView';
+import { useExportCsv } from './useExportCsv';
+import { useJobTemplateIds } from '../common/useJobTemplateIds';
 
 // ─── Hoisted mocks (run before vi.mock factories) ─────────────────────────────
 
-const { mockSetFilterState, mockBaseViewRefresh, mockRefreshDetails, mockExportCsvBase } =
-  vi.hoisted(() => ({
-    mockSetFilterState: vi.fn(),
-    mockBaseViewRefresh: vi.fn(),
-    mockRefreshDetails: vi.fn(),
-    mockExportCsvBase: vi.fn(),
-  }));
+const {
+  mockSetFilterState,
+  mockBaseViewRefresh,
+  mockRefreshDetails,
+  mockExportCsvBase,
+  mockUseAwxActiveUser,
+} = vi.hoisted(() => ({
+  mockSetFilterState: vi.fn(),
+  mockBaseViewRefresh: vi.fn(),
+  mockRefreshDetails: vi.fn(),
+  mockExportCsvBase: vi.fn(),
+  mockUseAwxActiveUser: vi.fn(() => ({ activeAwxUser: { id: 42 } })),
+}));
 
 // ─── Dependency mocks ─────────────────────────────────────────────────────────
 
-// Calculate default dates to match the source code's DEFAULT_FILTERS
-const DEFAULT_END_DATE = new Date(Date.now());
-const DEFAULT_START_DATE = new Date(DEFAULT_END_DATE.getTime() - 7 * 24 * 60 * 60 * 1000);
+vi.mock('../../../common/useAwxActiveUser', () => ({
+  useAwxActiveUser: mockUseAwxActiveUser,
+}));
 
 vi.mock('../common/useAutomationDashboardBaseView', () => ({
   useAutomationDashboardBaseView: vi.fn(() => ({
@@ -33,11 +41,7 @@ vi.mock('../common/useAutomationDashboardBaseView', () => ({
     sortDirection: 'asc',
     setSortDirection: vi.fn(),
     filterState: {
-      period: [
-        AutomationDashboardDateRangeFilterPresets.last_7_days,
-        DEFAULT_START_DATE.toISOString().split('T')[0],
-        DEFAULT_END_DATE.toISOString().split('T')[0],
-      ],
+      period: [AutomationDashboardDateRangeFilterPresets.last_7_days],
     },
     setFilterState: mockSetFilterState,
     clearAllFilters: vi.fn(),
@@ -71,11 +75,25 @@ vi.mock('./useExportCsv', () => ({
   useExportCsv: vi.fn(() => mockExportCsvBase),
 }));
 
+vi.mock('../common/useJobTemplateIds', () => ({
+  useJobTemplateIds: vi.fn(() => ({
+    templateIds: [
+      ['template', '1'],
+      ['template', '2'],
+      ['template', '3'],
+    ],
+    isLoading: false,
+    error: undefined,
+  })),
+}));
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('useAutomationDashboardView', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
+    mockUseAwxActiveUser.mockReturnValue({ activeAwxUser: { id: 42 } });
     mockBaseViewRefresh.mockResolvedValue(undefined);
     mockExportCsvBase.mockResolvedValue(undefined);
   });
@@ -111,8 +129,6 @@ describe('useAutomationDashboardView', () => {
     act(() => {
       result.current.mainTableView.clearAllFilters();
     });
-    // Note: clearAllFilters only resets to the preset, not including dates
-    // The dates are calculated in DEFAULT_FILTERS on module load
     expect(mockSetFilterState).toHaveBeenCalledWith({
       period: [AutomationDashboardDateRangeFilterPresets.last_7_days],
     });
@@ -226,5 +242,100 @@ describe('useAutomationDashboardView', () => {
     });
 
     expect(result.current.loading).toBe(false);
+  });
+
+  // --- System job exclusion wiring ---
+
+  test('should pass systemJobExclusionParams to useExportCsv', () => {
+    renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+
+    expect(vi.mocked(useExportCsv)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.arrayContaining([['template', '1']])
+    );
+  });
+
+  test('should pass isLoadingSystemJobExclusionIds as false when templates loaded successfully', () => {
+    renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+
+    expect(vi.mocked(useAutomationDashboardBaseView)).toHaveBeenCalledWith(
+      expect.objectContaining({ isLoadingSystemJobExclusionIds: false })
+    );
+  });
+
+  test('should pass isLoadingSystemJobExclusionIds as true when template IDs are loading', () => {
+    vi.mocked(useJobTemplateIds).mockReturnValueOnce({
+      templateIds: undefined,
+      isLoading: true,
+      error: undefined,
+    });
+
+    renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+
+    expect(vi.mocked(useAutomationDashboardBaseView)).toHaveBeenCalledWith(
+      expect.objectContaining({ isLoadingSystemJobExclusionIds: true })
+    );
+  });
+
+  test('should pass isLoadingSystemJobExclusionIds as true when template IDs have an error', () => {
+    vi.mocked(useJobTemplateIds).mockReturnValueOnce({
+      templateIds: undefined,
+      isLoading: false,
+      error: new Error('Failed to fetch templates'),
+    });
+
+    renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+
+    expect(vi.mocked(useAutomationDashboardBaseView)).toHaveBeenCalledWith(
+      expect.objectContaining({ isLoadingSystemJobExclusionIds: true })
+    );
+  });
+
+  test('should pass isLoadingSystemJobExclusionIds as true when template IDs are empty (no templates on instance)', () => {
+    vi.mocked(useJobTemplateIds).mockReturnValueOnce({
+      templateIds: [],
+      isLoading: false,
+      error: undefined,
+    });
+
+    renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+
+    expect(vi.mocked(useAutomationDashboardBaseView)).toHaveBeenCalledWith(
+      expect.objectContaining({ isLoadingSystemJobExclusionIds: true })
+    );
+  });
+
+  test('should expose isLoadingTemplateIds as false when templates loaded', () => {
+    const { result } = renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+    expect(result.current.isLoadingTemplateIds).toBe(false);
+  });
+
+  test('should expose isLoadingTemplateIds as true when templates are loading', () => {
+    vi.mocked(useJobTemplateIds).mockReturnValueOnce({
+      templateIds: undefined,
+      isLoading: true,
+      error: undefined,
+    });
+    const { result } = renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+    expect(result.current.isLoadingTemplateIds).toBe(true);
+  });
+
+  test('should expose templateIdsError as undefined when template IDs load successfully', () => {
+    const { result } = renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+    expect(result.current.templateIdsError).toBeUndefined();
+  });
+
+  test('should expose templateIdsError when template IDs fail to load', () => {
+    const templateError = new Error('Failed to fetch templates');
+    vi.mocked(useJobTemplateIds).mockReturnValueOnce({
+      templateIds: undefined,
+      isLoading: false,
+      error: templateError,
+    });
+
+    const { result } = renderHook(() => useAutomationDashboardView({ toolbarFilters: [] }));
+    expect(result.current.templateIdsError).toBe(templateError);
   });
 });

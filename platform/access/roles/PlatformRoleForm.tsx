@@ -1,5 +1,4 @@
 import {
-  PageForm,
   PageFormSubmitHandler,
   PageFormTextInput,
   PageHeader,
@@ -9,6 +8,7 @@ import {
 } from '@ansible/ansible-ui-framework';
 import { PageFormSection } from '@ansible/ansible-ui-framework/PageForm/Utils/PageFormSection';
 import { useGet } from '@ansible/common-ui/crud/useGet';
+import { useOptions } from '@ansible/common-ui/crud/useOptions';
 import { usePatchRequest } from '@ansible/common-ui/crud/usePatchRequest';
 import { usePostRequest } from '@ansible/common-ui/crud/usePostRequest';
 import { useInvalidateCacheOnUnmount } from '@ansible/common-ui/useInvalidateCache/useInvalidateCache';
@@ -21,9 +21,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { PageFormHidden } from '../../../framework/PageForm/Utils/PageFormHidden';
 import { PlatformRole } from '../../interfaces/PlatformRole';
 import { gatewayAPI } from '../../utils/gateway-api-utils';
+import { PlatformPageForm } from '../../common/PlatformPageForm';
 import { PageFormRolePermissionsSelect } from './components/PageFormPermissionsSelect';
 import { PageFormRoleTypeSelect } from './components/PageFormRoleTypeSelect';
 import { ContentTypeEnum } from '@ansible/hub-ui/interfaces/expanded/ContentType';
+import { ActionsResponse, OptionsResponse } from '@ansible/common-ui/interfaces/OptionsResponse';
 
 export function CreatePlatformRole(props: Readonly<{ breadcrumbLabelForPreviousPage?: string }>) {
   const { t } = useTranslation();
@@ -32,6 +34,9 @@ export function CreatePlatformRole(props: Readonly<{ breadcrumbLabelForPreviousP
 
   useInvalidateCacheOnUnmount();
 
+  const { data: optionsData } = useOptions<OptionsResponse<ActionsResponse>>(
+    gatewayAPI`/role_definitions/`
+  );
   const postRequest = usePostRequest<Partial<PlatformRole>, PlatformRole>();
 
   const onSubmit: PageFormSubmitHandler<PlatformRole> = async (role) => {
@@ -57,14 +62,15 @@ export function CreatePlatformRole(props: Readonly<{ breadcrumbLabelForPreviousP
           { label: t('Create role') },
         ]}
       />
-      <PageForm<PlatformRole>
+      <PlatformPageForm<PlatformRole>
         submitText={t('Create role')}
         onSubmit={onSubmit}
         cancelText={t('Cancel')}
         onCancel={onCancel}
+        optionsData={optionsData}
       >
         <PlatformRoleInputs isEditMode={false} />
-      </PageForm>
+      </PlatformPageForm>
     </PageLayout>
   );
 }
@@ -80,6 +86,9 @@ export function EditPlatformRole(props: Readonly<{ breadcrumbLabelForPreviousPag
 
   useInvalidateCacheOnUnmount();
 
+  const { data: optionsData } = useOptions<OptionsResponse<ActionsResponse>>(
+    gatewayAPI`/role_definitions/`
+  );
   const patchRequest = usePatchRequest<Partial<PlatformRole>, PlatformRole>();
 
   const onSubmit: PageFormSubmitHandler<PlatformRole> = async (data) => {
@@ -118,10 +127,11 @@ export function EditPlatformRole(props: Readonly<{ breadcrumbLabelForPreviousPag
               { label: role?.name ? t('Edit {{roleName}}', { roleName: role?.name }) : t('Roles') },
             ]}
           />
-          <PageForm<PlatformRole>
+          <PlatformPageForm<PlatformRole>
             submitText={t('Save role')}
             onSubmit={onSubmit}
             cancelText={t('Cancel')}
+            optionsData={optionsData}
             defaultValue={{
               ...role,
               content_type:
@@ -130,7 +140,7 @@ export function EditPlatformRole(props: Readonly<{ breadcrumbLabelForPreviousPag
             onCancel={onCancel}
           >
             <PlatformRoleInputs isEditMode={true} />
-          </PageForm>
+          </PlatformPageForm>
         </PageLayout>
       );
     }

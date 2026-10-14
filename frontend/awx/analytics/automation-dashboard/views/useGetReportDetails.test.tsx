@@ -19,8 +19,8 @@ const dashboardDetailsFixture: IDashboardDetails = {
   total_time_saving: 20,
   total_number_of_host_job_runs: 15,
   total_number_of_job_runs: 12,
-  top_projects: [{ id: 1, name: 'Project 1', execution_count: 5 }],
-  top_users: [{ id: 1, name: 'User 1', execution_count: 3 }],
+  top_projects: [{ id: 1, name: 'Project X', execution_count: 8 }],
+  top_users: [{ id: 1, name: 'admin', execution_count: 10 }],
   job_chart: { kind: 'day', items: [{ label: 'Mon', value: 3 }] },
   host_chart: { kind: 'day', items: [{ label: 'Mon', value: 2 }] },
 };
@@ -209,6 +209,52 @@ describe('useGetReportDetails', () => {
       expect(url.searchParams.get('tz')).toBe('UTC');
       expect(url.searchParams.get('template_name')).toBe('automation-job');
     });
+
+    test('should include extraSearchParams in the URL', async () => {
+      let capturedUrl = '';
+
+      server.use(
+        http.get(metricsAPI`/dashboard_reports/report/details/`, ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json(dashboardDetailsFixture);
+        })
+      );
+
+      const extraSearchParams: [string, string][] = [
+        ['template', '1'],
+        ['template', '2'],
+        ['template', '3'],
+      ];
+
+      const { result } = renderHook(() =>
+        useGetReportDetails([], {}, { tz: 'UTC' }, extraSearchParams)
+      );
+
+      await waitFor(() => expect(result.current.reportDetails).toBeDefined());
+
+      const url = new URL(capturedUrl);
+      expect(url.searchParams.get('tz')).toBe('UTC');
+      expect(url.searchParams.getAll('template')).toEqual(['1', '2', '3']);
+    });
+
+    test('should not include extraSearchParams when undefined', async () => {
+      let capturedUrl = '';
+
+      server.use(
+        http.get(metricsAPI`/dashboard_reports/report/details/`, ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json(dashboardDetailsFixture);
+        })
+      );
+
+      const { result } = renderHook(() => useGetReportDetails([], {}, { tz: 'UTC' }));
+
+      await waitFor(() => expect(result.current.reportDetails).toBeDefined());
+
+      const url = new URL(capturedUrl);
+      expect(url.searchParams.get('tz')).toBe('UTC');
+      expect(url.searchParams.getAll('template')).toEqual([]);
+    });
   });
 
   describe('Required filters validation', () => {
@@ -289,6 +335,48 @@ describe('useGetReportDetails', () => {
       );
 
       await waitFor(() => expect(result.current.reportDetails).toBeDefined());
+    });
+  });
+
+  describe('Exclusion IDs loading gate', () => {
+    test('should not fetch while isLoadingExclusionIds is true', async () => {
+      let requestReceived = false;
+      server.use(
+        http.get(metricsAPI`/dashboard_reports/report/details/`, () => {
+          requestReceived = true;
+          return HttpResponse.json(dashboardDetailsFixture);
+        })
+      );
+
+      const { result } = renderHook(() => useGetReportDetails([], {}, undefined, undefined, true));
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(requestReceived).toBe(false);
+      expect(result.current.reportDetails).toBeUndefined();
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    test('should fetch once isLoadingExclusionIds becomes false', async () => {
+      server.use(
+        http.get(metricsAPI`/dashboard_reports/report/details/`, () =>
+          HttpResponse.json(dashboardDetailsFixture)
+        )
+      );
+
+      const { result, rerender } = renderHook(
+        ({ loading }: { loading: boolean }) =>
+          useGetReportDetails([], {}, undefined, undefined, loading),
+        { initialProps: { loading: true } }
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(result.current.reportDetails).toBeUndefined();
+
+      rerender({ loading: false });
+
+      await waitFor(() => expect(result.current.reportDetails).toBeDefined());
+      expect(result.current.reportDetails).toEqual(dashboardDetailsFixture);
     });
   });
 });

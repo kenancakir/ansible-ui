@@ -1,11 +1,11 @@
 import { ActionList, ActionListItem, Button, Flex, FlexItem, Stack } from '@patternfly/react-core';
-import debounce from 'debounce';
+import { useDebounce } from '../hooks/useDebounce';
 import { SyncAltIcon } from '@patternfly/react-icons';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import styled from 'styled-components';
-import { SetRequired } from 'type-fest';
-import { PageAsyncSelectOptionsFn } from './PageAsyncSelectOptions';
+import { SetRequired } from '../utils/utilityTypes';
+import { mergePageSelectOptions, PageAsyncSelectOptionsFn } from './PageAsyncSelectOptions';
 import { PageMultiSelect, PageMultiSelectProps } from './PageMultiSelect';
 import { PageSelectOption } from './PageSelectOption';
 
@@ -57,15 +57,9 @@ export function PageAsyncMultiSelect<
   const [open, setOpen] = useState(false);
 
   const nextRef = useRef<number | string | undefined>();
+  const optionsRef = useRef<PageSelectOption<ValueT>[] | null>();
   const [searchValue, setSearchValue] = useState<string>('');
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const setSearch = useMemo(() => debounce((search: string) => setSearchValue(search), 200), []);
-
-  useEffect(() => {
-    return () => {
-      setSearch.clear();
-    };
-  }, [setSearch]);
+  const setSearch = useDebounce((search: string) => setSearchValue(search), 200);
 
   const queryOptions = useRef(props.queryOptions).current;
 
@@ -76,60 +70,34 @@ export function PageAsyncMultiSelect<
     }
     const abortController = new AbortController();
     activeAbortController.current = abortController;
-    setLoading(() => {
-      setAllLoaded(false);
-      setLoadingError(undefined);
-      setOptions((prevOptions) => {
-        if (prevOptions) {
-          return prevOptions;
-        } else {
-          return undefined;
+    setLoading(true);
+    setAllLoaded(false);
+    setLoadingError(undefined);
+    void queryOptions({
+      next: nextRef.current!,
+      signal: abortController.signal,
+      search: searchValue,
+    })
+      .then((result) => {
+        if (abortController.signal.aborted) return;
+        nextRef.current = result.next;
+        if (!result.remaining) {
+          setAllLoaded(true);
         }
-      });
-      void queryOptions({
-        next: nextRef.current!,
-        signal: abortController.signal,
-        search: searchValue,
+        const newOptions = mergePageSelectOptions(optionsRef.current, result.options, true);
+        if (abortController.signal.aborted) return;
+        optionsRef.current = newOptions;
+        setOptions(newOptions);
+        setTotal(result.remaining + newOptions.length);
       })
-        .then((result) => {
-          if (abortController.signal.aborted) return;
-          nextRef.current = result.next;
-          if (!result.remaining) {
-            setAllLoaded(true);
-          }
-          setOptions((prevOptions) => {
-            if (abortController.signal.aborted) return prevOptions;
-            let newOptions: PageSelectOption<ValueT>[] = [
-              ...(prevOptions ?? []),
-              ...result.options,
-            ];
-            const uniqueValues = new Set<ValueT>();
-            newOptions = newOptions.filter((option) => {
-              if (uniqueValues.has(option.value)) return false;
-              uniqueValues.add(option.value);
-              return true;
-            });
-            newOptions.sort((a, b) => {
-              const lhs = a.label.toLowerCase();
-              const rhs = b.label.toLowerCase();
-              if (lhs < rhs) return -1;
-              if (lhs > rhs) return 1;
-              return 0;
-            });
-            setTotal(result.remaining + newOptions.length);
-            return newOptions;
-          });
-        })
-        .catch((err) => {
-          if (abortController.signal.aborted) return;
-          setLoadingError(err instanceof Error ? err : new Error(t('Unknown error')));
-        })
-        .finally(() => {
-          if (abortController.signal.aborted) return;
-          setLoading(false);
-        });
-      return true;
-    });
+      .catch((err) => {
+        if (abortController.signal.aborted) return;
+        setLoadingError(err instanceof Error ? err : new Error(t('Unknown error')));
+      })
+      .finally(() => {
+        if (abortController.signal.aborted) return;
+        setLoading(false);
+      });
     return () => abortController.abort();
   }, [queryOptions, searchValue, t]);
 
@@ -148,6 +116,7 @@ export function PageAsyncMultiSelect<
       e.stopPropagation();
       setTotal(0);
       setOptions([]);
+      optionsRef.current = [];
       nextRef.current = undefined;
       queryHandler();
     },
@@ -155,12 +124,15 @@ export function PageAsyncMultiSelect<
   );
 
   useEffect(() => {
-    if (open) {
-      setTotal(0);
-      setOptions([]);
-      nextRef.current = undefined;
-      queryHandler();
+    if (!open) {
+      activeAbortController.current?.abort();
+      return;
     }
+    setTotal(0);
+    setOptions([]);
+    optionsRef.current = [];
+    nextRef.current = undefined;
+    return queryHandler();
   }, [open, queryHandler]);
 
   const footer = (

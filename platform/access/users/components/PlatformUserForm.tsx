@@ -1,6 +1,5 @@
 import {
   LoadingPage,
-  PageForm,
   PageFormSelect,
   PageFormSubmitHandler,
   PageFormTextInput,
@@ -17,6 +16,7 @@ import { UserAssignment } from '@ansible/common-ui/access/interfaces/UserAssignm
 import { postRequest } from '@ansible/common-ui/crud/Data';
 import { useDeleteRequest } from '@ansible/common-ui/crud/useDeleteRequest';
 import { useGet, useGetRequest } from '@ansible/common-ui/crud/useGet';
+import { useOptions } from '@ansible/common-ui/crud/useOptions';
 import { usePatchRequest } from '@ansible/common-ui/crud/usePatchRequest';
 import { usePostRequest } from '@ansible/common-ui/crud/usePostRequest';
 import { useCallback, useMemo } from 'react';
@@ -29,9 +29,11 @@ import { PlatformRole } from '../../../interfaces/PlatformRole';
 import { PlatformUser } from '../../../interfaces/PlatformUser';
 import { PlatformRoute } from '../../../main/PlatformRoutes';
 import { gatewayAPI } from '../../../utils/gateway-api-utils';
+import { PlatformPageForm } from '../../../common/PlatformPageForm';
 import { PageFormPlatformOrganizationsSelect } from '../../organizations/components/PageFormPlatformOrganizationsSelect';
 import { useGetOrganizationsForUser } from '../hooks/useGetOrganizationsForUser';
 import { useGetPlatformUsers } from '../hooks/useGetPlatformUsers';
+import { ActionsResponse, OptionsResponse } from '@ansible/common-ui/interfaces/OptionsResponse';
 
 enum USER_TYPE_ENUM {
   Normal = 'normal',
@@ -51,6 +53,7 @@ export function CreatePlatformUser() {
   const navigate = useNavigate();
   const alertToaster = usePageAlertToaster();
   const postUserRequest = usePostRequest<PlatformUser>();
+  const { data: optionsData } = useOptions<OptionsResponse<ActionsResponse>>(gatewayAPI`/users/`);
   const { data: platformAuditorRoleData, isLoading: isLoadingPlatformAuditorRole } = useGet<
     PlatformItemsResponse<PlatformRole>
   >(gatewayAPI`/role_definitions/`, {
@@ -129,15 +132,16 @@ export function CreatePlatformUser() {
           { label: t('Create user') },
         ]}
       />
-      <PageForm<IUserInput>
+      <PlatformPageForm<IUserInput>
         submitText={t('Create user')}
         onSubmit={onSubmit}
         cancelText={t('Cancel')}
         onCancel={() => void navigate(-1)}
         defaultValue={defaultValue}
+        optionsData={optionsData}
       >
         <PlatformUserInputs isCreate />
-      </PageForm>
+      </PlatformPageForm>
     </PageLayout>
   );
 }
@@ -149,6 +153,7 @@ export function EditPlatformUser() {
   const params = useParams<{ id?: string }>();
   const alertToaster = usePageAlertToaster();
   const userId = Number(params.id);
+  const { data: optionsData } = useOptions<OptionsResponse<ActionsResponse>>(gatewayAPI`/users/`);
 
   const { platformUser, isLoading } = useGetPlatformUsers(userId);
 
@@ -350,14 +355,15 @@ export function EditPlatformUser() {
           },
         ]}
       />
-      <PageForm<IUserInput>
+      <PlatformPageForm<IUserInput>
         submitText={t('Save user')}
         onSubmit={onSubmit}
         onCancel={() => void navigate(-1)}
         defaultValue={defaultValue}
+        optionsData={optionsData}
       >
         <PlatformUserInputs />
-      </PageForm>
+      </PlatformPageForm>
     </PageLayout>
   );
 }

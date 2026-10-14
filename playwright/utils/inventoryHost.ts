@@ -1,12 +1,14 @@
 import { AwxHost } from '@ansible/awx-ui/interfaces/AwxHost';
 import { Page, expect } from '@playwright/test';
 import { awxAPI } from '../commands/apiClient';
+import { clearTableFilters } from '../commands/clearTableFilters';
 import { clickTableRow } from '../commands/clickTableRow';
 import { confirmAndAssertDeletion } from '../commands/confirmAndAssertDeletion';
 import { createE2EName } from '../commands/createE2EName';
 import { fillMonacoEditor } from '../commands/fillMonacoEditor';
 import { getTableRow } from '../commands/getTableRow';
 import { navigateTo } from '../commands/navigateTo';
+import { waitForBulkActionDialog } from '../commands/waitForBulkActionDialog';
 
 export interface CreateHostInInventoryOptions {
   name?: string;
@@ -67,7 +69,7 @@ export const InventoryHost = {
             },
             {
               message: `Host ${host.id} still in use by running job`,
-              timeout: 60000,
+              timeout: 120000,
               intervals: [2000, 3000, 5000],
             }
           )
@@ -148,7 +150,14 @@ export const InventoryHost = {
 
     bulkDelete: async (page: Page, inventoryName: string): Promise<void> => {
       await InventoryHost.ui.navigateToInventoryHostsTab(inventoryName, page);
-      await page.getByLabel('Select all').check();
+
+      await clearTableFilters(page);
+      const rowCheckboxes = page.getByRole('checkbox', { name: 'Select row' });
+      await expect(rowCheckboxes).not.toHaveCount(0);
+      for (const checkbox of await rowCheckboxes.all()) {
+        await checkbox.check();
+      }
+
       await page.getByLabel('toolbar actions').click();
       await page.getByRole('menuitem', { name: 'Delete hosts' }).click();
 
@@ -157,16 +166,24 @@ export const InventoryHost = {
       await expect(dialog.getByText('Permanently delete hosts')).toBeVisible();
       await dialog.locator('#confirm').click();
       await page.getByRole('button', { name: 'Delete hosts', exact: true }).click();
+      await waitForBulkActionDialog(page);
 
-      // Wait for dialog to close and page to update
-      await expect(dialog).not.toBeVisible({ timeout: 30000 });
-
-      // Wait for the empty state message to appear
-      await expect(
-        page.getByRole('heading', { name: 'No hosts are assigned to this inventory.' })
-      ).toBeVisible({
-        timeout: 15000,
-      });
+      await clearTableFilters(page);
+      await expect
+        .poll(
+          async () => {
+            const count = await rowCheckboxes.count();
+            if (count === 0) {
+              return 0;
+            }
+            await page.reload();
+            await InventoryHost.ui.navigateToInventoryHostsTab(inventoryName, page);
+            await clearTableFilters(page);
+            return await rowCheckboxes.count();
+          },
+          { timeout: 60000, message: 'inventory hosts still listed after bulk delete' }
+        )
+        .toBe(0);
     },
   },
 };

@@ -1,18 +1,38 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { SwrTestWrapper } from '@ansible/ansible-ui-framework/test-utils/swrTestWrapper';
+import { awxAPI } from '@ansible/awx-ui/common/api/awx-utils';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SubscriptionWizard } from './SubscriptionWizard';
+import {
+  arrayBufferToBase64,
+  readSubscriptionManifestAsBase64,
+  subscriptionListToSelectOptions,
+  SubscriptionWizard,
+  subscriptionIdQueryLabel,
+} from './SubscriptionWizard';
+
+const mockRefreshAwxConfig = vi.hoisted(() => vi.fn());
 
 vi.mock('@ansible/awx-ui/common/useAwxConfig', () => ({
   useAwxConfig: () => ({ eula: 'End User License Agreement text for testing.' }),
-  useAwxConfigState: () => ({ refreshAwxConfig: vi.fn() }),
+  useAwxConfigState: () => ({ refreshAwxConfig: mockRefreshAwxConfig }),
 }));
 
-const server = setupServer();
+const subscriptionsOptionsHandler = vi.fn(() =>
+  HttpResponse.json({
+    actions: {
+      POST: {},
+    },
+  })
+);
+
+const server = setupServer(
+  http.options(awxAPI`/config/subscriptions/`, subscriptionsOptionsHandler)
+);
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'warn' }));
 afterEach(() => server.resetHandlers());
@@ -26,18 +46,91 @@ const defaultProps = {
 
 const renderWithRouter = (props = defaultProps) => {
   return render(
-    <MemoryRouter>
-      <SubscriptionWizard {...props} />
-    </MemoryRouter>
+    <SwrTestWrapper>
+      <MemoryRouter>
+        <SubscriptionWizard {...props} />
+      </MemoryRouter>
+    </SwrTestWrapper>
   );
 };
+
+describe('readSubscriptionManifestAsBase64', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('should base64-encode manifest file contents', async () => {
+    const encoded = await readSubscriptionManifestAsBase64(new File(['abc'], 'manifest.zip'));
+    expect(encoded).toBe(window.btoa('abc'));
+  });
+
+  it('should reject when reading the file fails', async () => {
+    const file = new File(['x'], 'manifest.zip');
+    vi.spyOn(file, 'arrayBuffer').mockRejectedValue(new Error('read failed'));
+
+    await expect(readSubscriptionManifestAsBase64(file)).rejects.toThrow('read failed');
+  });
+});
+
+describe('subscriptionListToSelectOptions', () => {
+  it('should return an empty list when subscriptions are missing', () => {
+    expect(subscriptionListToSelectOptions(null, (key) => key)).toEqual([]);
+  });
+});
+
+describe('arrayBufferToBase64', () => {
+  it('should encode array buffers as base64', () => {
+    const buffer = new Uint8Array([97, 98, 99]).buffer;
+    expect(arrayBufferToBase64(buffer)).toBe(window.btoa('abc'));
+  });
+});
+
+describe('subscriptionIdQueryLabel', () => {
+  it('should stringify subscription ids for the async select', () => {
+    expect(subscriptionIdQueryLabel('sub-123')).toBe('sub-123');
+  });
+
+  it('should return undefined when no subscription id is set', () => {
+    expect(subscriptionIdQueryLabel()).toBeUndefined();
+  });
+});
 
 describe('SubscriptionWizard Component', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRefreshAwxConfig.mockResolvedValue(undefined);
+    subscriptionsOptionsHandler.mockImplementation(() =>
+      HttpResponse.json({
+        actions: {
+          POST: {},
+        },
+      })
+    );
   });
 
   describe('Wizard Structure', () => {
+    it('should render review step after completing earlier wizard steps', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Subscription manifest' }));
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      await user.upload(
+        fileInput,
+        new File(['mock manifest content'], 'manifest.zip', { type: 'application/zip' })
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(
+        screen.getByRole('checkbox', { name: /I agree to the terms of the license agreement/i })
+      );
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument();
+      });
+    }, 15000);
+
     it('should render wizard with proper navigation steps', () => {
       renderWithRouter();
 
@@ -141,6 +234,23 @@ describe('SubscriptionWizard Component', () => {
 
       // Verify the file was uploaded
       expect(fileUploadField.files?.[0]).toBe(mockFile);
+    });
+
+    it('should reject non-zip manifest files', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Subscription manifest' }));
+
+      const fileUploadField = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const invalidFile = new File(['test content'], 'manifest.txt', { type: 'text/plain' });
+      await user.upload(fileUploadField, invalidFile);
+
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('File must be a .zip file')).toBeInTheDocument();
+      });
     });
   });
 
@@ -257,9 +367,233 @@ describe('SubscriptionWizard Component', () => {
     }, 10000);
   });
 
+  describe('OPTIONS-driven credential validation', () => {
+    const patternDescription = 'Client ID must be alphanumeric';
+    const usernamePatternDescription = 'Username must be alphanumeric';
+
+    beforeEach(() => {
+      subscriptionsOptionsHandler.mockImplementation(() =>
+        HttpResponse.json({
+          actions: {
+            POST: {
+              subscriptions_client_id: {
+                pattern: '^[a-zA-Z0-9_-]+$',
+                pattern_description: patternDescription,
+              },
+              subscriptions_username: {
+                pattern: '^[a-zA-Z0-9_-]+$',
+                pattern_description: usernamePatternDescription,
+              },
+            },
+          },
+        })
+      );
+    });
+
+    it('should show pattern description for invalid Client ID on blur', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await waitFor(() => {
+        expect(subscriptionsOptionsHandler).toHaveBeenCalled();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Service Account' }));
+
+      const clientIdField = await screen.findByRole('textbox', { name: 'Client ID' });
+      fireEvent.change(clientIdField, { target: { value: 'invalid@client' } });
+      fireEvent.blur(clientIdField);
+
+      await waitFor(() => {
+        expect(screen.getByText(patternDescription)).toBeInTheDocument();
+      });
+    });
+
+    it('should not show pattern error for valid Client ID on blur', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Service Account' }));
+
+      const clientIdField = await screen.findByRole('textbox', { name: 'Client ID' });
+      fireEvent.change(clientIdField, { target: { value: 'valid-client_01' } });
+      fireEvent.blur(clientIdField);
+
+      await waitFor(() => {
+        expect(screen.queryByText(patternDescription)).not.toBeInTheDocument();
+      });
+    });
+
+    it('should not show pattern error for valid Red Hat username on blur', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Username and Password' }));
+
+      const usernameField = screen.getByRole('textbox', { name: 'Username' });
+      fireEvent.change(usernameField, { target: { value: 'valid_user01' } });
+      fireEvent.blur(usernameField);
+
+      await waitFor(() => {
+        expect(screen.queryByText(usernamePatternDescription)).not.toBeInTheDocument();
+      });
+    });
+
+    it('should show pattern description for invalid Red Hat username on blur', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Username and Password' }));
+
+      const usernameField = screen.getByRole('textbox', { name: 'Username' });
+      fireEvent.change(usernameField, { target: { value: 'bad@user' } });
+      fireEvent.blur(usernameField);
+
+      await waitFor(() => {
+        expect(screen.getByText(usernamePatternDescription)).toBeInTheDocument();
+      });
+    });
+
+    it('should show pattern description for invalid Satellite username on blur', async () => {
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Red Hat Satellite' }));
+
+      const satelliteUsernameField = screen.getByRole('textbox', {
+        name: 'Red Hat Satellite username',
+      });
+      fireEvent.change(satelliteUsernameField, { target: { value: 'bad@satellite' } });
+      fireEvent.blur(satelliteUsernameField);
+
+      await waitFor(() => {
+        expect(screen.getByText(usernamePatternDescription)).toBeInTheDocument();
+      });
+    });
+  });
+
   describe('Auto-enabling Insights Tracking', () => {
+    it('should enable INSIGHTS_TRACKING_STATE when submitting satellite subscription', async () => {
+      let patchedSettings: Record<string, unknown> | undefined;
+
+      server.use(
+        http.post('*/config/subscriptions/', () =>
+          HttpResponse.json([
+            {
+              subscription_name: 'Satellite Subscription',
+              subscription_id: 'sub-sat',
+              instance_count: 5,
+              license_date: Math.floor(Date.now() / 1000) + 86400,
+            },
+          ])
+        ),
+        http.post('*/config/attach/', () => HttpResponse.json({})),
+        http.patch('*/settings/all/', async ({ request }) => {
+          patchedSettings = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({});
+        })
+      );
+
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Red Hat Satellite' }));
+
+      await user.type(
+        screen.getByRole('textbox', { name: 'Red Hat Satellite username' }),
+        'sat-user'
+      );
+      await user.type(
+        document.querySelector('input[type="password"]') as HTMLInputElement,
+        'sat-pass'
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Subscription' })).toBeEnabled();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Subscription' }));
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Satellite Subscription/ })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('option', { name: /Satellite Subscription/ }));
+
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(
+        screen.getByRole('checkbox', { name: /I agree to the terms of the license agreement/i })
+      );
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Finish' }));
+
+      await waitFor(() => {
+        expect(patchedSettings).toEqual({ INSIGHTS_TRACKING_STATE: true });
+      });
+    }, 30000);
+
+    it('should enable INSIGHTS_TRACKING_STATE when submitting username subscription', async () => {
+      let patchedSettings: Record<string, unknown> | undefined;
+
+      server.use(
+        http.post('*/config/subscriptions/', () =>
+          HttpResponse.json([
+            {
+              subscription_name: 'Username Subscription',
+              subscription_id: 'sub-user',
+              instance_count: 10,
+              license_date: Math.floor(Date.now() / 1000) + 86400,
+            },
+          ])
+        ),
+        http.post('*/config/attach/', () => HttpResponse.json({})),
+        http.patch('*/settings/all/', async ({ request }) => {
+          patchedSettings = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({});
+        })
+      );
+
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Username and Password' }));
+
+      await user.type(screen.getByRole('textbox', { name: 'Username' }), 'rh-user');
+      await user.type(
+        document.querySelector('input[type="password"]') as HTMLInputElement,
+        'rh-pass'
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Subscription' })).toBeEnabled();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Subscription' }));
+      await waitFor(() => {
+        expect(screen.getByRole('option', { name: /Username Subscription/ })).toBeInTheDocument();
+      });
+      await user.click(screen.getByRole('option', { name: /Username Subscription/ }));
+
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(
+        screen.getByRole('checkbox', { name: /I agree to the terms of the license agreement/i })
+      );
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(screen.getByRole('button', { name: 'Finish' }));
+
+      await waitFor(() => {
+        expect(patchedSettings).toEqual({ INSIGHTS_TRACKING_STATE: true });
+      });
+    }, 30000);
+
     it('should enable INSIGHTS_TRACKING_STATE when submitting service account subscription', async () => {
       let patchedSettings: Record<string, unknown> | undefined;
+      const events: string[] = [];
+
+      mockRefreshAwxConfig.mockImplementation(async () => {
+        events.push('refresh-start');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        events.push('refresh-complete');
+      });
+      mockOnSuccess.mockImplementation(() => events.push('success'));
 
       server.use(
         http.post('*/config/subscriptions/', () =>
@@ -323,7 +657,7 @@ describe('SubscriptionWizard Component', () => {
       await user.click(screen.getByRole('button', { name: 'Finish' }));
 
       await waitFor(() => {
-        expect(mockOnSuccess).toHaveBeenCalled();
+        expect(events).toEqual(['refresh-start', 'refresh-complete', 'success']);
       });
 
       expect(patchedSettings).toEqual({ INSIGHTS_TRACKING_STATE: true });
@@ -331,6 +665,14 @@ describe('SubscriptionWizard Component', () => {
 
     it('should not enable INSIGHTS_TRACKING_STATE when submitting manifest subscription', async () => {
       let patchCalled = false;
+      const events: string[] = [];
+
+      mockRefreshAwxConfig.mockImplementation(async () => {
+        events.push('refresh-start');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        events.push('refresh-complete');
+      });
+      mockOnSuccess.mockImplementation(() => events.push('success'));
 
       server.use(
         http.post('*/config/', () => HttpResponse.json({})),
@@ -371,10 +713,49 @@ describe('SubscriptionWizard Component', () => {
       await user.click(screen.getByRole('button', { name: 'Finish' }));
 
       await waitFor(() => {
-        expect(mockOnSuccess).toHaveBeenCalled();
+        expect(events).toEqual(['refresh-start', 'refresh-complete', 'success']);
       });
 
       expect(patchCalled).toBe(false);
+    }, 30000);
+
+    it('should explain when the manifest upload succeeds but refresh fails', async () => {
+      mockRefreshAwxConfig.mockRejectedValue(new Error('Refresh failed'));
+
+      server.use(http.post('*/config/', () => HttpResponse.json({})));
+
+      const user = userEvent.setup();
+      renderWithRouter();
+
+      await user.click(screen.getByRole('button', { name: 'Subscription manifest' }));
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(['mock manifest content'], 'manifest.zip', {
+        type: 'application/zip',
+      });
+      await user.upload(fileInput, file);
+
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+      await user.click(
+        screen.getByRole('checkbox', { name: /I agree to the terms of the license agreement/i })
+      );
+      await user.click(screen.getByRole('button', { name: 'Next' }));
+
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Finish' })).toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: 'Finish' }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByText(
+            'Subscription uploaded, but the subscription status could not be refreshed. Please try again.'
+          )
+        ).toBeInTheDocument();
+      });
+
+      expect(mockOnSuccess).not.toHaveBeenCalled();
     }, 30000);
   });
 });

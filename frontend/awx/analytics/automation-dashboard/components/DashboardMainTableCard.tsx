@@ -14,7 +14,7 @@ import { currencyFormatter } from '../../utilities/currencyFormatter';
 import { awxErrorAdapter } from '../../../common/adapters/awxErrorAdapter';
 import { metricsAPI } from '../../../common/api/metrics-utils';
 import { useAwxActiveUser } from '../../../common/useAwxActiveUser';
-import useResizeObserver from '@react-hook/resize-observer';
+import { useResizeObserver } from '@ansible/ansible-ui-framework/hooks/useResizeObserver';
 import { CardBody } from '@patternfly/react-core';
 import styled from 'styled-components';
 import { ExportIcon } from '@patternfly/react-icons';
@@ -54,6 +54,7 @@ export function DashboardMainTableCard(props: IAutomationDashboardView) {
     refresh,
     exportCsv,
     loading,
+    isLoadingTemplateIds,
     detailsError,
     isFilterStateDefault,
     toolbarFilters,
@@ -263,7 +264,13 @@ export function DashboardMainTableCard(props: IAutomationDashboardView) {
       exportType={'csv'}
       title={t('Export as CSV')}
       icon={ExportIcon}
-      isDisabled={loading || !(mainTableView.itemCount ?? 0) || !costState || !filtersValid}
+      isDisabled={
+        loading ||
+        isLoadingTemplateIds ||
+        !(mainTableView.itemCount ?? 0) ||
+        !costState ||
+        !filtersValid
+      }
       onExport={exportCsv}
     ></DashboardExportButton>
   );

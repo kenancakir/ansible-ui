@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
+import type { AlertProps } from '@patternfly/react-core';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { awxAPI } from '../../../common/api/awx-utils';
@@ -10,9 +11,10 @@ import {
   LaunchConfigCredential,
 } from '../../../interfaces/LaunchConfiguration';
 import { JobTemplate } from '../../../interfaces/JobTemplate';
+import { Spec, Survey } from '../../../interfaces/Survey';
 import { LaunchTemplate, LaunchWizard } from './TemplateLaunchWizard';
 
-const mockAddAlert = vi.fn();
+const mockAddAlert = vi.fn<(alert: AlertProps) => void>();
 
 vi.mock('@ansible/ansible-ui-framework', async () => ({
   ...(await vi.importActual('@ansible/ansible-ui-framework')),
@@ -123,7 +125,70 @@ const mockWJT = {
   },
 } as unknown as JobTemplate;
 
+const surveyQuestion = (overrides: Partial<Spec>): Spec => ({
+  question_name: '',
+  question_description: '',
+  required: false,
+  type: 'text',
+  variable: '',
+  min: 0,
+  max: 1024,
+  default: '',
+  choices: '',
+  new_question: false,
+  ...overrides,
+});
+
+const conditionalSurvey: Survey = {
+  name: '',
+  description: '',
+  spec: [
+    surveyQuestion({
+      question_name: 'Database mode',
+      variable: 'db_mode',
+      type: 'multiplechoice',
+      choices: ['internal', 'external'],
+      default: 'internal',
+    }),
+    surveyQuestion({
+      question_name: 'Database host',
+      variable: 'db_host',
+      required: true,
+      conditions: [{ variable: 'db_mode', operator: 'eq', value: 'external' }],
+    }),
+  ],
+};
+
+const multiPageSurvey: Survey = {
+  name: '',
+  description: '',
+  spec: [
+    surveyQuestion({
+      question_name: 'Hostname',
+      variable: 'hostname',
+      page: 1,
+      category: 'Network',
+    }),
+    surveyQuestion({ question_name: 'Owner', variable: 'owner', page: 2 }),
+  ],
+};
+
+function surveySpecHandlers(jobType: string, survey: Survey) {
+  return [
+    http.get(awxAPI`/${jobType}/1/survey_spec/`, () => HttpResponse.json(survey)),
+    http.options(awxAPI`/${jobType}/1/survey_spec/`, () =>
+      HttpResponse.json({ actions: { POST: {} } })
+    ),
+  ];
+}
+
 const server = setupServer(
+  http.options(awxAPI`/job_templates/1/launch/`, () =>
+    HttpResponse.json({ actions: { GET: {}, POST: {} } })
+  ),
+  http.options(awxAPI`/workflow_job_templates/1/launch/`, () =>
+    HttpResponse.json({ actions: { GET: {}, POST: {} } })
+  ),
   http.get(awxAPI`/job_templates/1/`, () => HttpResponse.json(mockTemplate)),
   http.get(awxAPI`/job_templates/1/launch/`, () => HttpResponse.json(makeConfig())),
   http.get(awxAPI`/labels/`, () => HttpResponse.json({ count: 0, results: [], next: null }))
@@ -203,7 +268,8 @@ describe('TemplateLaunchWizard', () => {
         });
 
         // With all ask_* false only Review step is visible; click Finish to submit
-        await user.click(screen.getByTestId('wizard-next'));
+        const finishButton = await screen.findByTestId('wizard-next', {}, { timeout: 5000 });
+        await user.click(finishButton);
 
         await waitFor(() => {
           expect(launchPosted).toBe(true);
@@ -479,7 +545,8 @@ describe('TemplateLaunchWizard', () => {
         </MemoryRouter>
       );
       await waitFor(() => expect(screen.getByText('Prompt on Launch')).toBeInTheDocument());
-      await user.click(screen.getByTestId('wizard-next'));
+      const finishButton = await screen.findByTestId('wizard-next', {}, { timeout: 5000 });
+      await user.click(finishButton);
       await waitFor(() => {
         expect(wjtLaunched).toBe(true);
       });
@@ -505,12 +572,104 @@ describe('TemplateLaunchWizard', () => {
           </MemoryRouter>
         );
         await waitFor(() => expect(screen.getByText('Prompt on Launch')).toBeInTheDocument());
-        await user.click(screen.getByTestId('wizard-next'));
+        const finishButton = await screen.findByTestId('wizard-next', {}, { timeout: 5000 });
+        await user.click(finishButton);
         await waitFor(() => {
           expect(mockAddAlert).toHaveBeenCalledWith(
             expect.objectContaining({ title: 'Failure to launch', variant: 'danger' })
           );
         });
+      }
+    );
+
+    it(
+      'should show the API validation error when a credential type mismatch is rejected',
+      { timeout: 15000 },
+      async () => {
+        mockAddAlert.mockClear();
+        server.use(
+          http.post(awxAPI`/job_templates/1/launch/`, () =>
+            HttpResponse.json(
+              {
+                credentials: ['Cannot assign a Credential of kind `token`'],
+              },
+              { status: 400 }
+            )
+          )
+        );
+        const user = userEvent.setup();
+        render(
+          <MemoryRouter initialEntries={['/job-templates/1/launch']}>
+            <Routes>
+              <Route
+                path="/job-templates/:id/launch"
+                element={<LaunchTemplate jobType="job_templates" />}
+              />
+            </Routes>
+          </MemoryRouter>
+        );
+        await waitFor(() => expect(screen.getByText('Prompt on Launch')).toBeInTheDocument());
+        const finishButton = await screen.findByTestId('wizard-next', {}, { timeout: 5000 });
+        await user.click(finishButton);
+        await waitFor(() => {
+          expect(mockAddAlert).toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'Failure to launch', variant: 'danger' })
+          );
+        });
+
+        const alertCall = mockAddAlert.mock.calls.find(
+          ([alert]) => alert.title === 'Failure to launch'
+        );
+        render(<>{alertCall?.[0].children}</>);
+        expect(screen.getByText('Cannot assign a Credential of kind `token`')).toBeInTheDocument();
+      }
+    );
+
+    it(
+      'should show every validation message when the API rejects multiple fields',
+      { timeout: 15000 },
+      async () => {
+        mockAddAlert.mockClear();
+        server.use(
+          http.post(awxAPI`/job_templates/1/launch/`, () =>
+            HttpResponse.json(
+              {
+                credentials: ['Cannot assign a Credential of kind `token`'],
+                inventory: ['This field is required.'],
+              },
+              { status: 400 }
+            )
+          )
+        );
+        const user = userEvent.setup();
+        render(
+          <MemoryRouter initialEntries={['/job-templates/1/launch']}>
+            <Routes>
+              <Route
+                path="/job-templates/:id/launch"
+                element={<LaunchTemplate jobType="job_templates" />}
+              />
+            </Routes>
+          </MemoryRouter>
+        );
+        await waitFor(() => expect(screen.getByText('Prompt on Launch')).toBeInTheDocument());
+        const finishButton = await screen.findByTestId('wizard-next', {}, { timeout: 5000 });
+        await user.click(finishButton);
+        await waitFor(() => {
+          expect(mockAddAlert).toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'Failure to launch', variant: 'danger' })
+          );
+        });
+
+        // Regression: with two rejected fields, useAwxErrorMessageParser's
+        // `.message` collapses to the fallback title, dropping both
+        // validation strings. The toast must render every parsed message.
+        const alertCall = mockAddAlert.mock.calls.find(
+          ([alert]) => alert.title === 'Failure to launch'
+        );
+        render(<>{alertCall?.[0].children}</>);
+        expect(screen.getByText('Cannot assign a Credential of kind `token`')).toBeInTheDocument();
+        expect(screen.getByText('This field is required.')).toBeInTheDocument();
       }
     );
 
@@ -566,6 +725,7 @@ describe('TemplateLaunchWizard', () => {
           http.get(awxAPI`/job_templates/1/launch/`, () =>
             HttpResponse.json(makeConfig({ survey_enabled: true }))
           ),
+          ...surveySpecHandlers('job_templates', conditionalSurvey),
           http.post(awxAPI`/job_templates/1/launch/`, async ({ request }) => {
             capturedPayload = (await request.json()) as Record<string, unknown>;
             return HttpResponse.json({ id: 100, type: 'job' });
@@ -585,6 +745,9 @@ describe('TemplateLaunchWizard', () => {
         );
 
         await waitFor(() => expect(screen.getByText('Prompt on Launch')).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText('Database mode')).toBeInTheDocument());
+        // The conditional question is hidden because its condition (db_mode eq external) is unmet.
+        expect(screen.queryByText('Database host')).not.toBeInTheDocument();
         await waitFor(() => expect(screen.getByTestId('Submit')).toBeInTheDocument());
         await user.click(screen.getByTestId('Submit'));
         await waitFor(() => expect(screen.getByTestId('wizard-next')).toBeInTheDocument());
@@ -593,8 +756,60 @@ describe('TemplateLaunchWizard', () => {
         await waitFor(() => {
           expect(capturedPayload).toHaveProperty('extra_vars');
         });
+        // The hidden question is required and has an empty default, yet it did not block
+        // the launch, and its value is not submitted.
+        expect(capturedPayload.extra_vars).toEqual({ db_mode: 'internal' });
       }
     );
+
+    it('should not fetch the survey spec when the survey is disabled', async () => {
+      let surveySpecRequested = false;
+      server.use(
+        http.get(awxAPI`/job_templates/1/survey_spec/`, () => {
+          surveySpecRequested = true;
+          return HttpResponse.json(conditionalSurvey);
+        })
+      );
+
+      render(
+        <MemoryRouter initialEntries={['/job-templates/1/launch']}>
+          <Routes>
+            <Route
+              path="/job-templates/:id/launch"
+              element={<LaunchTemplate jobType="job_templates" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      await waitFor(() => expect(screen.getByText('Prompt on Launch')).toBeInTheDocument());
+      expect(surveySpecRequested).toBe(false);
+    });
+
+    it('should render one wizard step per survey page', async () => {
+      server.use(
+        http.get(awxAPI`/job_templates/1/launch/`, () =>
+          HttpResponse.json(makeConfig({ survey_enabled: true }))
+        ),
+        ...surveySpecHandlers('job_templates', multiPageSurvey)
+      );
+
+      render(
+        <MemoryRouter initialEntries={['/job-templates/1/launch']}>
+          <Routes>
+            <Route
+              path="/job-templates/:id/launch"
+              element={<LaunchTemplate jobType="job_templates" />}
+            />
+          </Routes>
+        </MemoryRouter>
+      );
+
+      await waitFor(() => expect(screen.getAllByText('Network').length).toBeGreaterThan(0));
+      expect(screen.getAllByText('Survey (2)').length).toBeGreaterThan(0);
+      expect(screen.getByLabelText('Hostname')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Owner')).not.toBeInTheDocument();
+    });
 
     it(
       'should include credential_passwords in payload when passwords_needed_to_start is set',
